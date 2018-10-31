@@ -1,14 +1,15 @@
 package net.pkozak.sseangularspring;
 
-import java.time.Duration;
-import java.time.LocalTime;
-import org.springframework.http.codec.ServerSentEvent;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.event.EventListener;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
-
-
-import reactor.core.publisher.Flux;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
  * @project: sse-angular-spring
@@ -18,15 +19,44 @@ import reactor.core.publisher.Flux;
 @RestController
 public class StreamController {
 
+  private AtomicInteger count;
+
+  private final CopyOnWriteArrayList<SseEmitter> emitters = new CopyOnWriteArrayList<>();
+
+  @Autowired public StreamController() {
+    this.count = new AtomicInteger(0);
+  }
+
   @GetMapping("/progress")
   @CrossOrigin(origins = "http://localhost:4200")
-  public Flux<ServerSentEvent<String>> streamEvents() {
-    return Flux.interval(Duration.ofSeconds(1))
-        .map(sequence -> ServerSentEvent.<String> builder()
-            .id(String.valueOf(sequence))
-            .event("progressEvent")
-            .data("Loading part = " + sequence.intValue())
-            .build());
+  public SseEmitter streamEvents() {
+    SseEmitter emitter = new SseEmitter();
+    this.emitters.add(emitter);
+
+    emitter.onCompletion(() -> this.emitters.remove(emitter));
+    emitter.onTimeout(() -> this.emitters.remove(emitter));
+
+    return emitter;
+  }
+
+  @EventListener(CustomEvent.class)
+  public void onEvent(CustomEvent customEvent) {
+    List<SseEmitter> deadEmitters = new ArrayList<>();
+    this.emitters.forEach(emitter -> {
+      try {
+        SseEmitter.SseEventBuilder sseEventBuilder =
+            SseEmitter.event()
+                .name("progressEvent")
+                .data(customEvent.getData())
+                .id(count.toString());
+
+        emitter.send(sseEventBuilder);
+      } catch (Exception e) {
+        deadEmitters.add(emitter);
+      }
+    });
+
+    this.emitters.removeAll(deadEmitters);
   }
 
 }
